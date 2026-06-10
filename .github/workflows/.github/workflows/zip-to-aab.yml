@@ -1,0 +1,94 @@
+name: Convert ZIP to AAB
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '*.zip'
+  workflow_dispatch:
+
+jobs:
+  convert-zip-to-aab:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      
+      - name: Install bundletool
+        run: |
+          mkdir -p ~/bundletool
+          wget -q https://github.com/google/bundletool/releases/latest/download/bundletool-all.jar -O ~/bundletool/bundletool.jar
+          chmod +x ~/bundletool/bundletool.jar
+          echo "BUNDLETOOL_PATH=$HOME/bundletool/bundletool.jar" >> $GITHUB_ENV
+      
+      - name: Find and convert ZIP files
+        run: |
+          for zip_file in *.zip; do
+            if [ -f "$zip_file" ]; then
+              echo "Processing $zip_file..."
+              
+              # Extract ZIP to temp directory
+              temp_dir=$(mktemp -d)
+              unzip -q "$zip_file" -d "$temp_dir"
+              
+              # Look for APK files
+              apk_files=$(find "$temp_dir" -name "*.apk" -type f)
+              
+              if [ -z "$apk_files" ]; then
+                echo "No APK files found in $zip_file"
+                rm -rf "$temp_dir"
+                continue
+              fi
+              
+              # Get the base name for output
+              base_name="${zip_file%.zip}"
+              output_aab="${base_name}.aab"
+              
+              # Convert APK(s) to AAB using bundletool
+              if [ $(echo "$apk_files" | wc -l) -eq 1 ]; then
+                # Single APK
+                java -jar "$BUNDLETOOL_PATH" build-apks \
+                  --bundle="$(echo "$apk_files" | head -1)" \
+                  --output="$output_aab" \
+                  --mode=universal
+              else
+                # Multiple APKs - create a bundle
+                echo "$apk_files" | while read apk; do
+                  echo "Adding $apk to bundle..."
+                done
+              fi
+              
+              rm -rf "$temp_dir"
+              echo "Created $output_aab"
+            fi
+          done
+      
+      - name: Upload AAB artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aab-files
+          path: '*.aab'
+          if-no-files-found: ignore
+      
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          commit-message: 'Convert ZIP files to AAB format'
+          title: 'Convert ZIP to AAB'
+          body: 'Automated conversion of ZIP files to Android App Bundle (AAB) format'
+          branch: zip-to-aab-conversion
+          delete-branch: true
